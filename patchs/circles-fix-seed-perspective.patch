@@ -1,0 +1,13 @@
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=.git' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/scripts/seed-sanity.ts circles-web/scripts/seed-sanity.ts
+--- circles-web/scripts/seed-sanity.ts	2026-10-22 11:11:38.737276870 +0000
++++ circles-web/scripts/seed-sanity.ts	2026-10-22 11:11:25.461582816 +0000
+@@ -29,6 +29,9 @@
+   apiVersion: "2025-10-01",
+   token,
+   useCdn: false,
++  // Since API 2025-02-19 queries default to the "published" perspective and hide drafts.
++  // The seed must see drafts (to discard them), so it reads the raw dataset.
++  perspective: "raw",
+ });
+ 
+ const key = () => randomUUID().slice(0, 12);

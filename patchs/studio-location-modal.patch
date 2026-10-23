@@ -1,0 +1,97 @@
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=.sanity' '--exclude=*.tsbuildinfo' studio-circles-house/schemaTypes/documents.ts studio-circles-house/schemaTypes/documents.ts
+--- studio-circles-house/schemaTypes/documents.ts	2026-10-23 08:16:26.017086928 +0000
++++ studio-circles-house/schemaTypes/documents.ts	2026-10-23 08:19:35.013549952 +0000
+@@ -43,14 +43,86 @@
+   type: "document",
+   icon: HomeIcon,
+   description: "Places inside a location: coworking, spa, restaurant, rooftop…",
++  groups: [
++    { name: "card", title: "Card", default: true },
++    { name: "modal", title: "Location modal" },
++  ],
+   fields: [
+-    defineField({ name: "title", type: "string", validation: (rule) => rule.required() }),
+-    defineField({ name: "category", type: "string", description: "Small label above the card, e.g. Wellness.", validation: (rule) => rule.required() }),
+-    defineField({ name: "description", type: "text", rows: 3 }),
+-    defineField({ name: "access", type: "string", options: { list: ACCESS_OPTIONS, layout: "radio" }, initialValue: "Public" }),
+-    defineField({ name: "location", type: "reference", to: [{ type: "location" }] }),
+-    defineField({ name: "comingSoon", title: "Coming soon", type: "boolean", initialValue: false }),
+-    defineField({ name: "image", type: "imageWithAlt" }),
++    defineField({ name: "title", type: "string", group: "card", validation: (rule) => rule.required() }),
++    defineField({ name: "category", type: "string", group: "card", description: "Small label above the card, e.g. Wellness.", validation: (rule) => rule.required() }),
++    defineField({ name: "description", type: "text", rows: 3, group: "card" }),
++    defineField({ name: "access", type: "string", group: "card", options: { list: ACCESS_OPTIONS, layout: "radio" }, initialValue: "Public" }),
++    defineField({ name: "location", type: "reference", group: "card", to: [{ type: "location" }] }),
++    defineField({ name: "comingSoon", title: "Coming soon", type: "boolean", group: "card", initialValue: false }),
++    defineField({ name: "image", type: "imageWithAlt", group: "card" }),
++
++    // Shown in the modal that opens when the card is clicked.
++    defineField({
++      name: "about",
++      title: "Modal text",
++      type: "text",
++      rows: 4,
++      group: "modal",
++      description: "Leave empty to reuse the card description.",
++    }),
++    defineField({
++      name: "rating",
++      type: "number",
++      group: "modal",
++      description: "Shown as ★ 5/5. Leave empty to hide it.",
++      validation: (rule) => rule.min(1).max(5).precision(1),
++    }),
++    defineField({
++      name: "price",
++      type: "object",
++      group: "modal",
++      description: "Leave the value empty to hide the price.",
++      fields: [
++        defineField({ name: "label", type: "string", initialValue: "Starting from" }),
++        defineField({ name: "value", type: "string", description: "e.g. 1.900€/month" }),
++      ],
++    }),
++    defineField({
++      name: "amenities",
++      title: "Features",
++      type: "array",
++      group: "modal",
++      description: "The access (Public / Members only) is added automatically.",
++      of: [{ type: "string" }],
++      options: {
++        list: [
++          { title: "Coliving", value: "coliving" },
++          { title: "Coworking", value: "coworking" },
++        ],
++      },
++    }),
++    defineField({
++      name: "directions",
++      type: "string",
++      group: "modal",
++      description: "e.g. 20 minutes from Gràcia by public transport.",
++    }),
++    defineField({
++      name: "mapImage",
++      title: "Map image",
++      type: "imageWithAlt",
++      group: "modal",
++      description: "Clicking it opens the address in Google Maps.",
++    }),
++    defineField({
++      name: "page",
++      title: "Page button",
++      type: "link",
++      group: "modal",
++      description: "e.g. “View location” → /locations/barcelona. Leave empty if the space has no page of its own.",
++    }),
++    defineField({
++      name: "cta",
++      title: "Main button",
++      type: "link",
++      group: "modal",
++      description: "Leave empty to use the site's “Book a Stay” button.",
++    }),
+   ],
+   preview: { select: { title: "title", subtitle: "category", media: "image" } },
+ });

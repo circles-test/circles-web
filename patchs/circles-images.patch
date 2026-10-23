@@ -1,0 +1,206 @@
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/package.json circles-web/package.json
+--- circles-web/package.json	2026-10-22 12:55:58.061297638 +0000
++++ circles-web/package.json	2026-10-22 12:56:39.612180626 +0000
+@@ -7,7 +7,8 @@
+     "build": "next build",
+     "start": "next start",
+     "lint": "eslint",
+-    "seed": "tsx --env-file=.env.local scripts/seed-sanity.ts"
++    "seed": "tsx --env-file=.env.local scripts/seed-sanity.ts",
++    "upload-images": "tsx --env-file=.env.local scripts/upload-images.ts"
+   },
+   "dependencies": {
+     "@sanity/client": "^8.10.1",
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/scripts/media-map.ts circles-web/scripts/media-map.ts
+--- circles-web/scripts/media-map.ts	1970-01-01 00:00:00.000000000 +0000
++++ circles-web/scripts/media-map.ts	2026-10-22 12:56:10.816178915 +0000
+@@ -0,0 +1,40 @@
++/**
++ * Which image goes where. Used by `npm run upload-images`.
++ *
++ * - file:  name of the file inside the media folder
++ * - doc:   Sanity document id (as created by `npm run seed`)
++ * - field: image field in that document ("memberships.image" = field inside an object)
++ * - alt:   alternative text (accessibility/SEO) — marketing can edit it later in the Studio
++ *
++ * Change any line and run the script again: images already uploaded are not duplicated.
++ */
++export type MediaAssignment = { file: string; doc: string; field: string; alt: string };
++
++export const MEDIA_MAP: MediaAssignment[] = [
++  // Locations (Home slider)
++  { file: "circles-front.png", doc: "location-barcelona", field: "image", alt: "Front of Circles House Barcelona" },
++  { file: "andorra-panoremic.png", doc: "location-andorra", field: "image", alt: "Panoramic view of Andorra" },
++
++  // Spaces ("A more meaningful way to live, work, and connect.")
++  // ⚠ Assumption: the only "more-meaningfull" image is the first card (Spa).
++  { file: "more-meaningfull-1.png", doc: "space-spa-coming-soon", field: "image", alt: "Spa at Circles House" },
++  { file: "circles-front.png", doc: "space-circles-house-barcelona", field: "image", alt: "Front of Circles House Barcelona" },
++  { file: "kitchen.png", doc: "space-restaurant-andorra", field: "image", alt: "Restaurant kitchen" },
++  { file: "rooftop.png", doc: "space-rooftop", field: "image", alt: "Rooftop at Circles House" },
++
++  // Events ("Here's what's coming up"), in the order shown on the Home
++  { file: "whats-comming-1.jpg", doc: "event-movie-night", field: "image", alt: "Rooftop movie night" },
++  { file: "whats-comming-2.jpg", doc: "event-hiit-workout", field: "image", alt: "HIIT workout class" },
++  { file: "whats-comming-3.jpg", doc: "event-spanish-conversation-club-and-networking", field: "image", alt: "Spanish conversation club" },
++
++  // News ("Latest announcements"), in the order shown on the Home
++  { file: "last-announcements-1.png", doc: "newsPost-science-of-supper", field: "image", alt: "Community dinner at Circles House" },
++  { file: "last-announcements-2.png", doc: "newsPost-gen-z-housing", field: "image", alt: "Coworking at Circles House" },
++  { file: "last-announcements-3.png", doc: "newsPost-summer-giveaway", field: "image", alt: "Circles House Barcelona" },
++
++  // Memberships background — ⚠ the thumbnail ("memberships.thumbnail") has no image yet.
++  { file: "become-a-member.png", doc: "homePage", field: "memberships.image", alt: "Members at Circles House" },
++
++  // Footer
++  { file: "footer.png", doc: "siteSettings", field: "footer.image", alt: "Circles House" },
++];
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/scripts/test-sanity-adapter.ts circles-web/scripts/test-sanity-adapter.ts
+--- circles-web/scripts/test-sanity-adapter.ts	2026-10-22 12:55:58.059489855 +0000
++++ circles-web/scripts/test-sanity-adapter.ts	2026-10-22 12:56:39.676180630 +0000
+@@ -9,6 +9,7 @@
+ import { evaluate, parse } from "groq-js";
+ import { localAdapter } from "../src/lib/content/adapters/local";
+ import { createSanityAdapter } from "../src/lib/content/adapters/sanity";
++import { MEDIA_MAP } from "./media-map";
+ 
+ const output = execFileSync("npx", ["tsx", "scripts/seed-sanity.ts", "--dry-run"], {
+   encoding: "utf8",
+@@ -25,6 +26,16 @@
+ homeDoc.slider.push({ _type: "reference", _ref: "location-missing", _key: "dangling" });
+ homeDoc.testimonials.push({ _type: "reference", _ref: "testimonial-missing", _key: "dangling" });
+ 
++// Every image assignment must target a seeded document; attach fake assets to check the mapping.
++for (const { file, doc, field } of MEDIA_MAP) {
++  const target = dataset.find((d: { _id: string }) => d._id === doc);
++  assert.ok(target, `media-map: document "${doc}" (for ${file}) is not created by the seed`);
++  const parts = field.split(".");
++  const parent = parts.slice(0, -1).reduce((obj: Record<string, unknown>, key: string) => obj[key] as Record<string, unknown>, target);
++  assert.ok(parent, `media-map: "${doc}" has no "${parts.slice(0, -1).join(".")}"`);
++  parent[parts.at(-1)!] = { _type: "imageWithAlt", asset: { _type: "reference", _ref: `image-${file.replace(/\W/g, "")}-1200x800-png` } };
++}
++
+ const adapter = createSanityAdapter(async <T>(query: string) => {
+   const result = await evaluate(parse(query), { dataset });
+   return (await result.get()) as T;
+@@ -55,12 +66,22 @@
+   assert.deepEqual(sanitySettings.footer.legal, localSettings.footer.legal);
+   assert.equal(sanitySettings.contact.phone, localSettings.contact.phone);
+ 
++  // Images from media-map reach every slot of the Home.
++  const cdn = /^https:\/\/cdn\.sanity\.io\/images\//;
++  assert.ok(sanityHome.slider.every((l) => cdn.test(l.image ?? "")), "slider images");
++  assert.ok(sanityHome.network.spaces.every((s) => cdn.test(s.image ?? "")), "space images");
++  assert.ok(sanityHome.happeningNow.events.every((e) => cdn.test(e.image ?? "")), "event images");
++  assert.ok(sanityHome.news.items.every((n) => cdn.test(n.image ?? "")), "news images");
++  assert.match(sanityHome.memberships.image ?? "", cdn, "memberships background");
++  assert.match(sanitySettings.footer.image ?? "", cdn, "footer image");
++
+   // Event dates are formatted in the location's time zone.
+   const [first] = sanityHome.happeningNow.events;
+   assert.match(first.timeLabel, /^\d{1,2}:\d{2} [AP]M - \d{1,2}:\d{2} [AP]M GMT[+-]\d+$/);
+   assert.match(first.dateLabel, /^[A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}$/);
+ 
+   console.log("✔ Sanity adapter matches the local content");
++  console.log(`✔ ${MEDIA_MAP.length} image assignments reach the Home (e.g. ${sanityHome.slider[0].image})`);
+   console.log("  first event:", first.month, first.day, "·", first.dateLabel, "·", first.timeLabel);
+ }
+ 
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/scripts/upload-images.ts circles-web/scripts/upload-images.ts
+--- circles-web/scripts/upload-images.ts	1970-01-01 00:00:00.000000000 +0000
++++ circles-web/scripts/upload-images.ts	2026-10-22 12:56:23.360179660 +0000
+@@ -0,0 +1,94 @@
++/**
++ * Uploads the images listed in scripts/media-map.ts to Sanity and puts each one
++ * in its field (published document and, if it exists, its unpublished draft).
++ *
++ *   npm run upload-images -- <folder>             # e.g. public/media
++ *   npm run upload-images -- <folder> --dry-run   # only checks files and documents
++ *
++ * Needs SANITY_WRITE_TOKEN (Editor) in .env.local, like `npm run seed`.
++ * Safe to run again: Sanity recognises files it already has and doesn't duplicate them.
++ */
++import { createReadStream, existsSync } from "node:fs";
++import path from "node:path";
++import { createClient } from "@sanity/client";
++import { MEDIA_MAP } from "./media-map";
++
++const args = process.argv.slice(2);
++const dryRun = args.includes("--dry-run");
++const folder = args.find((arg) => !arg.startsWith("--"));
++
++if (!folder) {
++  console.error("Tell me where the images are: npm run upload-images -- public/<folder>");
++  process.exit(1);
++}
++
++const projectId = process.env.NEXT_PUBLIC_SANITY_PROJECT_ID;
++const token = process.env.SANITY_WRITE_TOKEN;
++if (!projectId || (!token && !dryRun)) {
++  console.error("Missing NEXT_PUBLIC_SANITY_PROJECT_ID or SANITY_WRITE_TOKEN in .env.local");
++  process.exit(1);
++}
++
++const client = createClient({
++  projectId,
++  dataset: process.env.NEXT_PUBLIC_SANITY_DATASET ?? "production",
++  apiVersion: "2025-10-01",
++  token,
++  useCdn: false,
++  perspective: "raw", // see drafts too
++});
++
++async function main() {
++  // 1. Every file must exist before touching anything.
++  const missingFiles = [...new Set(MEDIA_MAP.map((m) => m.file))].filter((file) => !existsSync(path.join(folder!, file)));
++  if (missingFiles.length) {
++    console.error(`These files are not in ${folder}:\n  - ${missingFiles.join("\n  - ")}`);
++    process.exit(1);
++  }
++
++  if (dryRun && !token) {
++    console.log(`(dry run) ${MEDIA_MAP.length} assignments, all files found in ${folder}. Documents not checked (no token).`);
++    return;
++  }
++
++  // 2. Which target documents (and drafts) exist.
++  const docIds = [...new Set(MEDIA_MAP.map((m) => m.doc))];
++  const existing = new Set(
++    await client.fetch<string[]>(`*[_id in $ids]._id`, { ids: [...docIds, ...docIds.map((id) => `drafts.${id}`)] }),
++  );
++  const missingDocs = docIds.filter((id) => !existing.has(id) && !existing.has(`drafts.${id}`));
++  if (missingDocs.length) {
++    console.warn(`⚠ Not found in Sanity (renamed or deleted?), skipping:\n  - ${missingDocs.join("\n  - ")}`);
++  }
++
++  if (dryRun) {
++    console.log(`(dry run) all files found; ${docIds.length - missingDocs.length}/${docIds.length} documents found.`);
++    return;
++  }
++
++  // 3. Upload each file once, then set it on every field that uses it.
++  const assetIds = new Map<string, string>();
++  for (const { file, doc, field, alt } of MEDIA_MAP) {
++    if (missingDocs.includes(doc)) continue;
++
++    if (!assetIds.has(file)) {
++      const asset = await client.assets.upload("image", createReadStream(path.join(folder!, file)), { filename: file });
++      assetIds.set(file, asset._id);
++    }
++
++    const value = { _type: "imageWithAlt", alt, asset: { _type: "reference", _ref: assetIds.get(file) } };
++    const tx = client.transaction();
++    for (const id of [doc, `drafts.${doc}`]) {
++      if (existing.has(id)) tx.patch(id, (patch) => patch.set({ [field]: value }));
++    }
++    await tx.commit();
++    console.log(`✔ ${file} → ${doc} › ${field}`);
++  }
++
++  console.log(`\nDone: ${assetIds.size} images uploaded. Check them in the Studio.`);
++}
++
++main().catch((error) => {
++  console.error(error);
++  process.exit(1);
++});

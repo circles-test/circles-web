@@ -1,0 +1,550 @@
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/package.json circles-web/package.json
+--- circles-web/package.json	2026-10-23 08:16:23.413833807 +0000
++++ circles-web/package.json	2026-10-23 08:21:22.410534873 +0000
+@@ -8,7 +8,8 @@
+     "start": "next start",
+     "lint": "eslint",
+     "seed": "tsx --env-file=.env.local scripts/seed-sanity.ts",
+-    "upload-images": "tsx --env-file=.env.local scripts/upload-images.ts"
++    "upload-images": "tsx --env-file=.env.local scripts/upload-images.ts",
++    "seed:space-details": "tsx --env-file=.env.local scripts/seed-space-details.ts"
+   },
+   "dependencies": {
+     "@sanity/client": "^8.10.1",
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/scripts/seed-sanity.ts circles-web/scripts/seed-sanity.ts
+--- circles-web/scripts/seed-sanity.ts	2026-10-23 08:16:23.411997225 +0000
++++ circles-web/scripts/seed-sanity.ts	2026-10-23 08:21:22.305096785 +0000
+@@ -58,6 +58,20 @@
+ 
+ // --- Spaces --------------------------------------------------------------------
+ 
++/** Location-modal fields as stored in Sanity (images are not uploaded). */
++function spaceDetails(details: (typeof home.spaces)[number]["details"]) {
++  if (!details) return {};
++  return {
++    about: details.about,
++    rating: details.rating,
++    price: details.price,
++    amenities: details.amenities,
++    directions: details.directions,
++    page: details.page && link(details.page),
++    cta: details.cta && link(details.cta),
++  };
++}
++
+ const spaces = home.spaces.map((s) => {
+   const locationId = locationIdForAddress(s.address);
+   return {
+@@ -69,6 +83,7 @@
+     access: s.access,
+     comingSoon: s.comingSoon,
+     ...(locationId && { location: { _type: "reference", _ref: locationId } }),
++    ...spaceDetails(s.details),
+   };
+ });
+ 
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/scripts/seed-space-details.ts circles-web/scripts/seed-space-details.ts
+--- circles-web/scripts/seed-space-details.ts	1970-01-01 00:00:00.000000000 +0000
++++ circles-web/scripts/seed-space-details.ts	2026-10-23 08:21:37.744581080 +0000
+@@ -0,0 +1,79 @@
++/**
++ * Fills the new Location-modal fields of the spaces already in Sanity with the
++ * example values from src/content/home.ts (taken from Figma).
++ * Only empty fields are filled: anything edited in the Studio is left as is.
++ *
++ *   npm run seed:space-details
++ *   npm run seed:space-details -- --dry-run
++ *
++ * Needs SANITY_WRITE_TOKEN (Editor) in .env.local.
++ */
++import { createClient } from "@sanity/client";
++import * as home from "../src/content/home";
++
++const dryRun = process.argv.includes("--dry-run");
++const projectId = process.env.NEXT_PUBLIC_SANITY_PROJECT_ID;
++const token = process.env.SANITY_WRITE_TOKEN;
++if (!projectId || (!token && !dryRun)) {
++  console.error("Missing NEXT_PUBLIC_SANITY_PROJECT_ID or SANITY_WRITE_TOKEN in .env.local");
++  process.exit(1);
++}
++
++const client = createClient({
++  projectId,
++  dataset: process.env.NEXT_PUBLIC_SANITY_DATASET ?? "production",
++  apiVersion: "2025-10-01",
++  token,
++  useCdn: false,
++  perspective: "raw", // see drafts too
++});
++
++// Same ids as scripts/seed-sanity.ts
++const slugify = (s: string) =>
++  s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
++const link = (l?: { label: string; href: string }) => l && { _type: "link", label: l.label, href: l.href };
++
++const updates = home.spaces
++  .filter((s) => s.details)
++  .map(({ title, details }) => {
++    const fields = {
++      about: details!.about,
++      rating: details!.rating,
++      price: details!.price,
++      amenities: details!.amenities,
++      directions: details!.directions,
++      page: link(details!.page),
++      cta: link(details!.cta),
++    };
++    // Drop empty values so setIfMissing doesn't create them.
++    return { id: `space-${slugify(title)}`, fields: Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)) };
++  });
++
++async function main() {
++  if (dryRun) {
++    for (const { id, fields } of updates) console.log(id, "←", Object.keys(fields).join(", "));
++    console.log(`(dry run) ${updates.length} spaces would be updated (only empty fields)`);
++    return;
++  }
++
++  const ids = updates.flatMap((u) => [u.id, `drafts.${u.id}`]);
++  const existing = new Set(await client.fetch<string[]>(`*[_id in $ids]._id`, { ids }));
++
++  const tx = client.transaction();
++  for (const { id, fields } of updates) {
++    const targets = [id, `drafts.${id}`].filter((t) => existing.has(t));
++    if (!targets.length) {
++      console.warn(`⚠ ${id} not found in Sanity, skipping`);
++      continue;
++    }
++    for (const target of targets) tx.patch(target, (patch) => patch.setIfMissing(fields));
++    console.log(`✔ ${id} ← ${Object.keys(fields).join(", ")}`);
++  }
++  await tx.commit();
++  console.log("Done. Only empty fields were filled — check the “Location modal” tab of each Space in the Studio.");
++}
++
++main().catch((error) => {
++  console.error(error);
++  process.exit(1);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/scripts/test-sanity-adapter.ts circles-web/scripts/test-sanity-adapter.ts
+--- circles-web/scripts/test-sanity-adapter.ts	2026-10-23 08:16:23.411642478 +0000
++++ circles-web/scripts/test-sanity-adapter.ts	2026-10-23 08:21:37.745164003 +0000
+@@ -66,6 +66,13 @@
+   assert.deepEqual(sanitySettings.footer.legal, localSettings.footer.legal);
+   assert.equal(sanitySettings.contact.phone, localSettings.contact.phone);
+ 
++  // Location-modal fields reach the site exactly like the local content.
++  const pick = (d?: object) => JSON.parse(JSON.stringify(d ?? {}, (k, v) => (k === "mapImage" || k === "_type" || k === "_key" ? undefined : v)));
++  assert.deepEqual(
++    sanityHome.network.spaces.map((s) => pick(s.details)),
++    localHome.network.spaces.map((s) => pick(s.details)),
++  );
++
+   // Images from media-map reach every slot of the Home.
+   const cdn = /^https:\/\/cdn\.sanity\.io\/images\//;
+   assert.ok(sanityHome.slider.every((l) => cdn.test(l.image ?? "")), "slider images");
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/src/app/globals.css circles-web/src/app/globals.css
+--- circles-web/src/app/globals.css	2026-10-23 08:16:23.041613258 +0000
++++ circles-web/src/app/globals.css	2026-10-23 08:17:36.622145521 +0000
+@@ -71,6 +71,11 @@
+   }
+ }
+ 
++/* No page scroll behind an open modal (Location modal, video player). */
++html:has(dialog[open]:modal) {
++  overflow: hidden;
++}
++
+ /* Horizontal carousels: hide the scrollbar but keep native swipe/scroll. */
+ @utility scrollbar-none {
+   scrollbar-width: none;
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/src/app/page.tsx circles-web/src/app/page.tsx
+--- circles-web/src/app/page.tsx	2026-10-23 08:16:23.042411555 +0000
++++ circles-web/src/app/page.tsx	2026-10-23 08:17:36.622832897 +0000
+@@ -1,5 +1,4 @@
+ import { NewsCard } from "@/components/cards/NewsCard";
+-import { SpaceCard } from "@/components/cards/SpaceCard";
+ import { TestimonialCard } from "@/components/cards/TestimonialCard";
+ import { Carousel } from "@/components/sections/Carousel";
+ import { HappeningNow } from "@/components/sections/HappeningNow";
+@@ -8,22 +7,20 @@
+ import { IntroductionText } from "@/components/sections/IntroductionText";
+ import { Memberships } from "@/components/sections/Memberships";
+ import { Newsletter } from "@/components/sections/Newsletter";
+-import { getHomePage } from "@/lib/content";
++import { SpacesCarousel } from "@/components/sections/SpacesCarousel";
++import { getHomePage, getSiteSettings } from "@/lib/content";
+ 
+ export default async function Home() {
+   const { hero, slider, network, happeningNow, memberships, introduction, testimonials, news, newsletter } =
+     await getHomePage();
++  const { book } = await getSiteSettings();
+ 
+   return (
+     <>
+       <Hero {...hero} />
+       {slider.length > 0 && <HeroSlider slides={slider} />}
+ 
+-      <Carousel eyebrow={network.eyebrow} title={network.title} className="pt-20 lg:pt-32" trackClassName="items-center py-12">
+-        {network.spaces.map(({ size, ...space }) => (
+-          <SpaceCard key={space.title} space={space} size={size} />
+-        ))}
+-      </Carousel>
++      <SpacesCarousel {...network} defaultCta={book} />
+ 
+       {happeningNow.events.length > 0 && <HappeningNow {...happeningNow} />}
+       <Memberships {...memberships} />
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/src/components/cards/SpaceCard.tsx circles-web/src/components/cards/SpaceCard.tsx
+--- circles-web/src/components/cards/SpaceCard.tsx	2026-10-23 08:16:23.040368116 +0000
++++ circles-web/src/components/cards/SpaceCard.tsx	2026-10-23 08:16:46.474263724 +0000
+@@ -17,6 +17,26 @@
+   comingSoon?: boolean;
+   image?: string;
+   href?: string;
++  /** Extra details shown in the Location modal. */
++  details?: SpaceDetails;
++};
++
++export type SpaceAmenity = "coliving" | "coworking";
++
++export type SpaceDetails = {
++  /** Modal text; the card description is used when empty. */
++  about?: string;
++  /** 1–5 */
++  rating?: number;
++  price?: { label: string; value: string };
++  amenities?: SpaceAmenity[];
++  /** e.g. "20 minutes from Gràcia by public transport." */
++  directions?: string;
++  mapImage?: string;
++  /** "View location" — present only when the space has its own page. */
++  page?: { label: string; href: string };
++  /** Main button; defaults to the site's "Book a Stay". */
++  cta?: { label: string; href: string };
+ };
+ 
+ const sizes = {
+@@ -25,7 +45,18 @@
+   small: "h-[232px] w-[316px]",
+ };
+ 
+-export function SpaceCard({ space, size = "medium", className }: { space: Space; size?: keyof typeof sizes; className?: string }) {
++export function SpaceCard({
++  space,
++  size = "medium",
++  onSelect,
++  className,
++}: {
++  space: Space;
++  size?: keyof typeof sizes;
++  /** Makes the whole card a button (e.g. to open the Location modal) instead of a link. */
++  onSelect?: () => void;
++  className?: string;
++}) {
+   const { category, title, description, access, address, comingSoon, image, href } = space;
+   const body = (
+     <>
+@@ -58,6 +89,21 @@
+   );
+ 
+   const classes = cn("group flex shrink-0 flex-col items-start gap-2", className);
++  if (onSelect) {
++    // A button stretched over the card keeps the heading structure valid (no <h3> inside a <button>).
++    return (
++      <article className={cn(classes, "relative")}>
++        {body}
++        <button
++          type="button"
++          onClick={onSelect}
++          aria-haspopup="dialog"
++          aria-label={`${title} — more details`}
++          className="absolute inset-0 z-10 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-black"
++        />
++      </article>
++    );
++  }
+   return href ? (
+     <Link href={href} className={classes}>
+       {body}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/src/components/modals/LocationModal.tsx circles-web/src/components/modals/LocationModal.tsx
+--- circles-web/src/components/modals/LocationModal.tsx	1970-01-01 00:00:00.000000000 +0000
++++ circles-web/src/components/modals/LocationModal.tsx	2026-10-23 08:19:11.984623216 +0000
+@@ -0,0 +1,158 @@
++"use client";
++
++import { IconHomeCheck, IconHomeStats, IconMapPin, IconShield, IconStarFilled, IconX } from "@tabler/icons-react";
++import { useEffect, useRef, type ReactNode } from "react";
++import type { Space, SpaceAmenity } from "@/components/cards/SpaceCard";
++import { Button } from "@/components/ui/Button";
++import { Eyebrow } from "@/components/ui/Eyebrow";
++import { IconButton } from "@/components/ui/IconButton";
++import { Media } from "@/components/ui/Media";
++
++/**
++ * Figma: "Location modal - with page" / "without page" (desktop 448×768, mobile full screen).
++ * Mobile: full-screen sheet sliding up. Desktop: full-height panel sliding in from the right.
++ * The second button ("View location") only shows when the space has its own page.
++ */
++const amenities: Record<SpaceAmenity, { label: string; icon: ReactNode }> = {
++  coliving: { label: "Coliving", icon: <IconHomeCheck size={16} stroke={1.5} /> },
++  coworking: { label: "Coworking", icon: <IconHomeStats size={16} stroke={1.5} /> },
++};
++
++function Feature({ icon, children }: { icon: ReactNode; children: ReactNode }) {
++  return (
++    <li className="flex items-center gap-1 text-detail">
++      {icon}
++      {children}
++    </li>
++  );
++}
++
++export function LocationModal({
++  space,
++  open,
++  onClose,
++  defaultCta,
++}: {
++  space: Space | null;
++  open: boolean;
++  onClose: () => void;
++  /** Used when the space has no button of its own (site's "Book a Stay"). */
++  defaultCta: { label: string; href: string };
++}) {
++  const dialogRef = useRef<HTMLDialogElement>(null);
++
++  useEffect(() => {
++    const dialog = dialogRef.current;
++    if (!dialog) return;
++    if (open && !dialog.open) {
++      dialog.showModal();
++      // Start keyboard focus on the close button (React's autoFocus runs before the dialog opens).
++      dialog.querySelector<HTMLElement>("[data-autofocus]")?.focus();
++    }
++    if (!open && dialog.open) dialog.close();
++  }, [open]);
++
++  const details = space?.details ?? {};
++  const cta = details.cta ?? defaultCta;
++  const mapsHref = space?.address
++    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(space.address)}`
++    : undefined;
++
++  return (
++    <dialog
++      ref={dialogRef}
++      aria-labelledby="location-modal-title"
++      onClose={onClose}
++      onClick={(event) => event.target === event.currentTarget && onClose()}
++      className="m-0 h-dvh max-h-none w-full max-w-none bg-background p-0 text-black backdrop:bg-black/40 lg:ml-auto lg:w-[448px] transition-transform duration-300 ease-out starting:translate-y-full lg:starting:translate-x-full lg:starting:translate-y-0"
++    >
++      {space && (
++        <div className="flex h-full flex-col">
++          <div className="flex-1 overflow-y-auto">
++            <div className="relative h-56 w-full shrink-0">
++              <Media src={space.image} alt={space.title} sizes="(min-width: 1024px) 448px, 100vw" />
++              <IconButton
++                label="Close"
++                onClick={onClose}
++                icon={<IconX size={16} stroke={1.5} />}
++                tone="light"
++                shape="circle"
++                slide="none"
++                className="absolute top-4 right-4"
++                data-autofocus
++              />
++            </div>
++
++            <div className="flex flex-col gap-2.5 px-4 pt-6 pb-4">
++              <div className="flex items-center gap-2">
++                <Eyebrow className="flex-1">{space.category}</Eyebrow>
++                {space.comingSoon && <span className="text-detail text-red uppercase">Coming soon</span>}
++                {details.rating && (
++                  <span className="flex items-center gap-1 text-detail" aria-label={`Rated ${details.rating} out of 5`}>
++                    <IconStarFilled aria-hidden size={16} />
++                    {details.rating}/5
++                  </span>
++                )}
++              </div>
++              <h2 id="location-modal-title" className="font-display text-h2">
++                {space.title}
++              </h2>
++            </div>
++
++            <div className="flex flex-col gap-4 px-4 pb-4">
++              {(details.about ?? space.description) && <p className="text-body">{details.about ?? space.description}</p>}
++
++              {details.price && (
++                <div className="flex flex-col gap-1">
++                  <p className="text-cta text-black/50">{details.price.label}</p>
++                  <p className="font-display text-h3">{details.price.value}</p>
++                </div>
++              )}
++
++              {(details.amenities?.length || space.access) && (
++                <ul className="flex flex-wrap gap-4 pt-4" aria-label="Features">
++                  {details.amenities?.map((key) => (
++                    <Feature key={key} icon={amenities[key].icon}>
++                      {amenities[key].label}
++                    </Feature>
++                  ))}
++                  {space.access && <Feature icon={<IconShield size={16} stroke={1.5} />}>{space.access}</Feature>}
++                </ul>
++              )}
++
++              {(space.address || details.mapImage) && (
++                <div className="flex flex-col gap-4 pt-4">
++                  <a
++                    href={mapsHref}
++                    target="_blank"
++                    rel="noopener noreferrer"
++                    aria-label={`Open ${space.address ?? space.title} in Google Maps`}
++                    className="group relative block h-32 w-full overflow-hidden"
++                  >
++                    <Media src={details.mapImage} alt="" sizes="(min-width: 1024px) 416px, 100vw" />
++                    {!details.mapImage && (
++                      <IconMapPin aria-hidden size={24} stroke={1.5} className="absolute inset-0 m-auto text-black/50" />
++                    )}
++                  </a>
++                  <div className="flex flex-col gap-1 pr-6 text-cta">
++                    {space.address && <p>{space.address}</p>}
++                    {details.directions && <p className="text-black/50">{details.directions}</p>}
++                  </div>
++                </div>
++              )}
++            </div>
++          </div>
++
++          <div className="flex shrink-0 justify-center gap-2 border-t border-black/12 px-4 py-4">
++            {details.page && (
++              <Button href={details.page.href} variant="secondary">
++                {details.page.label}
++              </Button>
++            )}
++            <Button href={cta.href}>{cta.label}</Button>
++          </div>
++        </div>
++      )}
++    </dialog>
++  );
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/src/components/sections/SpacesCarousel.tsx circles-web/src/components/sections/SpacesCarousel.tsx
+--- circles-web/src/components/sections/SpacesCarousel.tsx	1970-01-01 00:00:00.000000000 +0000
++++ circles-web/src/components/sections/SpacesCarousel.tsx	2026-10-23 08:17:23.462520669 +0000
+@@ -0,0 +1,44 @@
++"use client";
++
++import { useState, type ReactNode } from "react";
++import { SpaceCard, type Space } from "@/components/cards/SpaceCard";
++import { LocationModal } from "@/components/modals/LocationModal";
++import { Carousel } from "./Carousel";
++
++/**
++ * "A more meaningful way to live, work, and connect." — clicking a card opens
++ * the Location modal with that space's details.
++ */
++export function SpacesCarousel({
++  eyebrow,
++  title,
++  spaces,
++  defaultCta,
++}: {
++  eyebrow: string;
++  title: ReactNode;
++  spaces: (Space & { size: "large" | "medium" | "small" })[];
++  defaultCta: { label: string; href: string };
++}) {
++  const [selected, setSelected] = useState<Space | null>(null);
++  const [open, setOpen] = useState(false);
++
++  return (
++    <>
++      <Carousel eyebrow={eyebrow} title={title} className="pt-20 lg:pt-32" trackClassName="items-center py-12">
++        {spaces.map(({ size, ...space }) => (
++          <SpaceCard
++            key={space.title}
++            space={space}
++            size={size}
++            onSelect={() => {
++              setSelected(space);
++              setOpen(true);
++            }}
++          />
++        ))}
++      </Carousel>
++      <LocationModal space={selected} open={open} onClose={() => setOpen(false)} defaultCta={defaultCta} />
++    </>
++  );
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/src/content/home.ts circles-web/src/content/home.ts
+--- circles-web/src/content/home.ts	2026-10-23 08:16:23.042813191 +0000
++++ circles-web/src/content/home.ts	2026-10-23 08:17:36.623286019 +0000
+@@ -42,6 +42,16 @@
+       "Our mission is to build a global, decentralized network of spaces where authentic relationships and well-being take center stage, empowering a brighter future.",
+     access: "Members only",
+     address: "Cami de Vallvidrera al Tibidabo 5, Barcelona, Spain",
++    // Example values from the Figma "Location modal - with page".
++    details: {
++      about:
++        "Located in a natural park and only a 5 minute walk from a metro station, our house in Vallvidrera is well-located and allows you to get anywhere quickly and easily.",
++      rating: 5,
++      price: { label: "Starting from", value: "$1.900€/month" },
++      amenities: ["coliving", "coworking"],
++      directions: "20 minutes from Gràcia by public transport.",
++      page: { label: "View location", href: "/locations/barcelona" },
++    },
+   },
+   {
+     size: "medium",
+@@ -51,6 +61,8 @@
+       "The best quality local produce and a commitment to biodynamic and sustainable methods are the key ingredients in a recipe for happiness at Bodega Bonay.",
+     access: "Public",
+     address: "123 Mountain View, Andorra la Vella, Andorra",
++    // Example values from the Figma "Location modal - without page".
++    details: { rating: 5, directions: "20 minutes from Gràcia by public transport." },
+   },
+   {
+     size: "small",
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=*.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/src/lib/content/adapters/sanity/index.ts circles-web/src/lib/content/adapters/sanity/index.ts
+--- circles-web/src/lib/content/adapters/sanity/index.ts	2026-10-23 08:16:23.175643815 +0000
++++ circles-web/src/lib/content/adapters/sanity/index.ts	2026-10-23 08:21:00.323703979 +0000
+@@ -1,3 +1,4 @@
++import type { SpaceAmenity } from "@/components/cards/SpaceCard";
+ import type { ContentAdapter, HomePage, Link, Location, SiteSettings, SocialNetwork } from "../../types";
+ import { imageUrl, sanityFetch, type SanityImage } from "./client";
+ 
+@@ -43,7 +44,16 @@
+           comingSoon?: boolean;
+           image?: SanityImage;
+           location?: RawLocation;
+-        };
++          // Location modal
++          about?: string;
++          rating?: number;
++          price?: { label?: string; value?: string };
++          amenities?: SpaceAmenity[];
++          directions?: string;
++          mapImage?: SanityImage;
++          page?: Link;
++          cta?: Link;
++        } | null;
+       }[];
+     };
+     happeningNow?: { eyebrow?: string; title?: string; viewAll?: Link };
+@@ -194,6 +204,16 @@
+             comingSoon: space!.comingSoon,
+             address: space!.location?.address,
+             image: imageUrl(space!.image, 1200),
++            details: {
++              about: space!.about,
++              rating: space!.rating,
++              price: space!.price?.value ? { label: space!.price.label ?? "", value: space!.price.value } : undefined,
++              amenities: space!.amenities,
++              directions: space!.directions,
++              mapImage: imageUrl(space!.mapImage, 900),
++              page: space!.page?.href ? space!.page : undefined,
++              cta: space!.cta?.href ? space!.cta : undefined,
++            },
+           })),
+       },
+       happeningNow: {

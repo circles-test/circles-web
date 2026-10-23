@@ -1,26 +1,85 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/*
+ * Brand fonts (Clash Display + PP Fragment Sans) are self-hosted.
+ * Drop the .woff2 files into /public/fonts with these names and they take over;
+ * until then the Google fallbacks loaded in layout.tsx are used.
+ */
+@font-face {
+  font-family: "Clash Display";
+  src: url("/fonts/ClashDisplay-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+@font-face {
+  font-family: "PP Fragment Sans";
+  src: url("/fonts/PPFragment-SansRegular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@font-face {
+  font-family: "PP Fragment Sans";
+  src: url("/fonts/PPFragment-SansLight.woff2") format("woff2");
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Design tokens — names follow the Figma variables (Circles - website). */
+@theme {
+  --color-black: #000000;
+  --color-white: #ffffff;
+  --color-background: #fffef7;
+  --color-red: #db4f3c;
+  --color-cream: #c37254;
+
+  --font-display: "Clash Display", var(--font-display-fallback), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "PP Fragment Sans", var(--font-sans-fallback), ui-sans-serif, system-ui, sans-serif;
+
+  /* Text styles: H1, H2, H3, Body, CTA, Detail */
+  --text-h1: 64px;
+  --text-h1--line-height: 68px;
+  --text-h2: 34px;
+  --text-h2--line-height: 1.2;
+  --text-h3: 18px;
+  --text-h3--line-height: 1.2;
+  --text-body: 14px;
+  --text-body--line-height: 20px;
+  --text-cta: 14px;
+  --text-cta--line-height: 1;
+  --text-detail: 12px;
+  --text-detail--line-height: 1;
+
+  --breakpoint-xl: 1366px;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background font-sans text-body text-black antialiased;
+  }
+
+  button {
+    cursor: pointer;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* No page scroll behind an open modal (Location modal, video player). */
+html:has(dialog[open]:modal) {
+  overflow: hidden;
+}
+
+/* Horizontal carousels: hide the scrollbar but keep native swipe/scroll. */
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }

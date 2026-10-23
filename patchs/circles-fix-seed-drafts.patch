@@ -1,0 +1,38 @@
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=.git' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/scripts/seed-sanity.ts circles-web/scripts/seed-sanity.ts
+--- circles-web/scripts/seed-sanity.ts	2026-10-22 11:09:13.990034688 +0000
++++ circles-web/scripts/seed-sanity.ts	2026-10-22 11:08:54.281573829 +0000
+@@ -177,13 +177,32 @@
+     process.exit(1);
+   }
+ 
+-  // Earlier versions of this script used dotted (private) ids — remove them.
++  // Unpublished drafts of the seeded documents would keep old content (and old references): discard them.
++  const drafts = await client.fetch<string[]>(`*[_id in $ids]._id`, { ids: docs.map((d) => `drafts.${d._id}`) });
++
++  // Earlier versions of this script used dotted (private) ids — remove them and their drafts.
+   const legacyIds = await client.fetch<string[]>(
+-    `*[${SEEDED_TYPES.map((t) => `_id in path("${t}.*")`).join(" || ")}]._id`,
++    `*[${SEEDED_TYPES.flatMap((t) => [`_id in path("${t}.*")`, `_id in path("drafts.${t}.*")`]).join(" || ")}]._id`,
+   );
+ 
++  // Anything else still pointing at a legacy document would block its deletion: stop and say what.
++  if (legacyIds.length) {
++    const blocking = await client.fetch<{ _id: string; _type: string }[]>(
++      `*[references($legacyIds) && !(_id in $handled)]{ _id, _type }`,
++      { legacyIds, handled: [...legacyIds, ...drafts, ...docs.map((d) => d._id)] },
++    );
++    if (blocking.length) {
++      console.error("These documents reference the old seeded content. Point them to the new documents (or delete them) in the Studio, then run again:");
++      for (const doc of blocking) console.error(`  - ${doc._type}: ${doc._id}`);
++      process.exit(1);
++    }
++  }
++
++  if (drafts.length) console.log(`  Discarding unpublished drafts: ${drafts.join(", ")}`);
++
+   const tx = client.transaction();
+   for (const doc of docs) tx.createOrReplace(doc);
++  for (const id of drafts) tx.delete(id);
+   for (const id of legacyIds) tx.delete(id);
+   await tx.commit();
+ 

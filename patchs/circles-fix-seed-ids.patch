@@ -1,0 +1,161 @@
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=.git' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/scripts/seed-sanity.ts circles-web/scripts/seed-sanity.ts
+--- circles-web/scripts/seed-sanity.ts	2026-10-22 10:22:01.924722908 +0000
++++ circles-web/scripts/seed-sanity.ts	2026-10-22 11:04:55.779277308 +0000
+@@ -7,6 +7,9 @@
+  *
+  * Needs NEXT_PUBLIC_SANITY_PROJECT_ID, NEXT_PUBLIC_SANITY_DATASET and
+  * SANITY_WRITE_TOKEN (Editor) in .env.local. Images are not uploaded.
++ *
++ * IDs use "-" on purpose: in Sanity an id with a dot ("location.barcelona") is a
++ * *private path*, invisible to the site's public (token-less) queries.
+  */
+ import { randomUUID } from "node:crypto";
+ import { createClient, type IdentifiedSanityDocumentStub } from "@sanity/client";
+@@ -44,7 +47,7 @@
+ 
+ const locations = home.locations.map((l) => {
+   const s = l.href.split("/").pop()!;
+-  return { _id: `location.${s}`, _type: "location", name: l.name, slug: slug(s), address: l.address, ...locationMeta[s] };
++  return { _id: `location-${s}`, _type: "location", name: l.name, slug: slug(s), address: l.address, ...locationMeta[s] };
+ });
+ 
+ const locationIdForAddress = (address?: string) =>
+@@ -55,7 +58,7 @@
+ const spaces = home.spaces.map((s) => {
+   const locationId = locationIdForAddress(s.address);
+   return {
+-    _id: `space.${slugify(s.title)}`,
++    _id: `space-${slugify(s.title)}`,
+     _type: "space",
+     title: s.title,
+     category: s.category,
+@@ -76,11 +79,11 @@
+ };
+ 
+ const events = home.happeningNow.events.map((e, i) => ({
+-  _id: `event.${slugify(e.title)}`,
++  _id: `event-${slugify(e.title)}`,
+   _type: "event",
+   title: e.title,
+   slug: slug(slugify(e.title)),
+-  location: { _type: "reference", _ref: `location.${e.city.toLowerCase()}` },
++  location: { _type: "reference", _ref: `location-${e.city.toLowerCase()}` },
+   startsAt: inDays(7 + i * 3, 19),
+   endsAt: inDays(7 + i * 3, 21, 30),
+   access: e.access,
+@@ -92,7 +95,7 @@
+ const newsPosts = home.news.items.map((n) => {
+   const s = n.href.split("/").pop()!;
+   return {
+-    _id: `newsPost.${s}`,
++    _id: `newsPost-${s}`,
+     _type: "newsPost",
+     title: n.title,
+     slug: slug(s),
+@@ -103,7 +106,7 @@
+ });
+ 
+ const testimonials = home.testimonials.map((t) => ({
+-  _id: `testimonial.${slugify(t.author)}`,
++  _id: `testimonial-${slugify(t.author)}`,
+   _type: "testimonial",
+   quote: t.quote,
+   author: t.author,
+@@ -157,6 +160,8 @@
+ 
+ // --- Write ---------------------------------------------------------------------
+ 
++const SEEDED_TYPES = ["location", "space", "event", "newsPost", "testimonial"];
++
+ async function main() {
+   const docs: IdentifiedSanityDocumentStub[] = [...locations, ...spaces, ...events, ...newsPosts, ...testimonials, siteSettings, homePage];
+ 
+@@ -172,10 +177,18 @@
+     process.exit(1);
+   }
+ 
++  // Earlier versions of this script used dotted (private) ids — remove them.
++  const legacyIds = await client.fetch<string[]>(
++    `*[${SEEDED_TYPES.map((t) => `_id in path("${t}.*")`).join(" || ")}]._id`,
++  );
++
+   const tx = client.transaction();
+   for (const doc of docs) tx.createOrReplace(doc);
++  for (const id of legacyIds) tx.delete(id);
+   await tx.commit();
+ 
++  if (legacyIds.length) console.log(`✔ Removed ${legacyIds.length} documents with legacy private ids`);
++
+   console.log(`✔ Seeded ${docs.length} documents into ${projectId}/${client.config().dataset}`);
+ }
+ 
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=.git' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/scripts/test-sanity-adapter.ts circles-web/scripts/test-sanity-adapter.ts
+--- circles-web/scripts/test-sanity-adapter.ts	2026-10-22 10:22:01.930749829 +0000
++++ circles-web/scripts/test-sanity-adapter.ts	2026-10-22 11:05:04.238540289 +0000
+@@ -16,6 +16,15 @@
+ });
+ const dataset = JSON.parse(output.slice(0, output.lastIndexOf("]") + 1));
+ 
++// Seeded ids must be public: in Sanity an id containing a dot is a private path.
++const privateIds = dataset.map((d: { _id: string }) => d._id).filter((id: string) => id.includes("."));
++assert.deepEqual(privateIds, [], "seed must not create dotted (private) ids");
++
++// A reference to a missing/unpublished document resolves to null — the adapter must skip it.
++const homeDoc = dataset.find((d: { _id: string }) => d._id === "homePage");
++homeDoc.slider.push({ _type: "reference", _ref: "location-missing", _key: "dangling" });
++homeDoc.testimonials.push({ _type: "reference", _ref: "testimonial-missing", _key: "dangling" });
++
+ const adapter = createSanityAdapter(async <T>(query: string) => {
+   const result = await evaluate(parse(query), { dataset });
+   return (await result.get()) as T;
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=.git' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' circles-web/src/lib/content/adapters/sanity/index.ts circles-web/src/lib/content/adapters/sanity/index.ts
+--- circles-web/src/lib/content/adapters/sanity/index.ts	2026-10-22 10:22:01.931698346 +0000
++++ circles-web/src/lib/content/adapters/sanity/index.ts	2026-10-22 11:05:04.238043806 +0000
+@@ -29,7 +29,7 @@
+ type RawHome = {
+   page: {
+     hero?: { title?: string; description?: string; videoLabel?: string; videoUrl?: string; videoPoster?: SanityImage };
+-    slider?: RawLocation[];
++    slider?: (RawLocation | null)[];
+     network?: {
+       eyebrow?: string;
+       title?: string;
+@@ -53,7 +53,7 @@
+       imageLeft?: SanityImage;
+       imageRight?: SanityImage;
+     };
+-    testimonials?: { quote: string; author: string; source?: string; url?: string }[];
++    testimonials?: ({ quote: string; author: string; source?: string; url?: string } | null)[];
+     news?: { eyebrow?: string; title?: string };
+     newsletter?: { description?: string };
+   } | null;
+@@ -178,7 +178,8 @@
+           ? { label: page.hero.videoLabel, src: page.hero.videoUrl, poster: imageUrl(page.hero.videoPoster, 800) }
+           : undefined,
+       },
+-      slider: (page.slider ?? []).map(toLocation),
++      // References resolve to null when the target is missing or unpublished — skip those.
++      slider: (page.slider ?? []).filter(isPresent).map(toLocation),
+       network: {
+         eyebrow: page.network?.eyebrow ?? "",
+         title: page.network?.title ?? "",
+@@ -216,7 +217,7 @@
+           right: imageUrl(page.introduction?.imageRight, 600),
+         },
+       },
+-      testimonials: (page.testimonials ?? []).map((t) => ({
++      testimonials: (page.testimonials ?? []).filter(isPresent).map((t) => ({
+         quote: t.quote,
+         author: t.author,
+         source: t.source ?? "",
+@@ -241,6 +242,10 @@
+ 
+ export const sanityAdapter = createSanityAdapter((query) => sanityFetch(query));
+ 
++function isPresent<T>(value: T | null | undefined): value is T {
++  return value != null;
++}
++
+ function missingSafe<T extends object>(section: T | undefined, name: string): T {
+   return section ?? missing(`Home page › ${name}`);
+ }
